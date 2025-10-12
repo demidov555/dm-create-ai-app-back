@@ -1,8 +1,33 @@
 {
-  "name": "Python Dev",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "name": "FastAPI-Cassandra-Chat",
+  "image": "mcr.microsoft.com/devcontainers/python:3.10",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:1": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    }
   },
-  "postCreateCommand": "pip install -r requirements.txt"
+  "postCreateCommand": "pip install -r requirements.txt",
+  "forwardPorts": [8000, 9042],
+  "portsAttributes": {
+    "8000": {
+      "label": "FastAPI",
+      "onAutoForward": "openBrowser"
+    },
+    "9042": {
+      "label": "Cassandra",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-vscode.vscode-docker",
+        "dbaeumer.vscode-eslint",
+        "redhat.vscode-yaml",
+        "ms-python.vscode-pylance",
+        "fisheva.eva-theme"
+      ]
+    }
+  }
 }

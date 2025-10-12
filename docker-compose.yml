@@ -1,0 +1,28 @@
+services:
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra-db
+    ports:
+      - "9042:9042" # CQL порт
+    environment:
+      - CASSANDRA_CLUSTER_NAME=ChatCluster
+      - CASSANDRA_SEEDS=cassandra
+      - JVM_OPTS=-Dcassandra.bind_address=0.0.0.0
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    networks:
+      - cassandra-net # Создаём сеть для связи контейнеров
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status | grep -w UN"] # Проверяем, что нода Cassandra в статусе "Up Normal"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  cassandra_data:
+
+
+networks:
+  cassandra-net:
+    driver: bridge

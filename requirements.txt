@@ -2,3 +2,8 @@ fastapi
 uvicorn
 autogenstudio
 openai
+pydantic
+python-multipart
+python-dotenv
+cassandra-driver
+
