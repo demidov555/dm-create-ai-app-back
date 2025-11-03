@@ -1,4 +1,4 @@
-from db.main import get_session
+from .main import get_session
 
 
 def get_agents_by_project(project_id: int):

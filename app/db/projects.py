@@ -1,4 +1,4 @@
-from db.main import get_session
+from .main import get_session
 
 
 def get_projects():
@@ -16,6 +16,7 @@ def insert_project(project):
     INSERT INTO projects (project_id, name, description, status, agent_count, last_updated)
     VALUES (%s, %s, %s, %s, %s, toTimestamp(now()))
     """
+
     get_session().execute(query, [
         project.project_id,
         project.name,
@@ -23,4 +24,5 @@ def insert_project(project):
         project.status,
         project.agent_count
     ])
-    return {"status": "created"}
+
+    return {"projectId": project.project_id}

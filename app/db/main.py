@@ -12,7 +12,7 @@ class Database:
             contact_points=[os.getenv("CASSANDRA_HOST")],
             port=int(os.getenv("CASSANDRA_PORT"))
         )
-        self.session = self.cluster.connect(self.keyspace) 
+        self.session = self.cluster.connect(self.keyspace)
 
     def get_session(self):
         return self.session

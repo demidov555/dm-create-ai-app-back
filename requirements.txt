@@ -1,9 +1,15 @@
 fastapi
 uvicorn
 autogenstudio
+autogen-agentchat
+autogen-ext
 openai
 pydantic
 python-multipart
 python-dotenv
 cassandra-driver
+aiohttp
+python-socketio
+pytest
+pytest-asyncio
 

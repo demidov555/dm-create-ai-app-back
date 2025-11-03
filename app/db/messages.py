@@ -1,4 +1,4 @@
-from db.main import get_session
+from .main import get_session
 
 
 def get_messages_by_project(project_id: int):
@@ -7,9 +7,19 @@ def get_messages_by_project(project_id: int):
     FROM messages
     WHERE project_id = %s
     """
-    session = get_session()
-    rows = session.execute(query, [project_id])
-    return [dict(row._asdict()) for row in rows]
+
+    rows = get_session().execute(query, [project_id])
+
+    return [
+        {
+            "projectId": row.project_id,
+            "message": row.message,
+            "role": row.role,
+            "timestamp": row.timestamp,
+            "userId": row.user_id
+        }
+        for row in rows
+    ]
 
 
 def insert_message(msg):
@@ -17,8 +27,8 @@ def insert_message(msg):
     INSERT INTO messages (project_id, user_id, timestamp, role, message)
     VALUES (%s, %s, now(), %s, %s)
     """
-    session = get_session()
-    session.execute(query, [
+
+    get_session().execute(query, [
         msg.project_id,
         msg.user_id,
         msg.role,
