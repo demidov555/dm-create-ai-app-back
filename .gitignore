@@ -43,3 +43,4 @@ coverage.xml
 *.pickle
 *.pkl
 init.cql
+serviceAccountKey.json

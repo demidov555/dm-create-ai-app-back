@@ -12,4 +12,7 @@ aiohttp
 python-socketio
 pytest
 pytest-asyncio
+firebase-admin
+python-jose[cryptography]
+python-multipart
 

@@ -1,10 +1,10 @@
 from datetime import datetime
-from pprint import pprint
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from app.agents.product_manager import get_ai_response
 from app.db import messages as db_messages
 from pydantic import BaseModel, Field
-from app.sockets import sio
+import json
 
 router = APIRouter()
 
@@ -22,24 +22,31 @@ def get_messages(project_id: int):
     return db_messages.get_messages(project_id)
 
 
-@sio.on("chat_message")
-async def create_message(sid, message_request):
-    message_request = Message(**message_request)
+@router.post("/chat_message")
+async def create_message(message_request: Message):
+    async def event_stream():
+        # db_messages.save_message(message_request)
 
-    await sio.enter_room(sid, message_request.project_id)
+        context = db_messages.get_messages_by_project(
+            message_request.project_id)
 
-    # Получаем ответ от Groq
-    context = db_messages.get_messages_by_project(message_request.project_id)
-    groq_response = await get_ai_response(message_request.project_id, message_request.user_id, message_request.message, context)
+        ai_response = await get_ai_response(
+            message_request.project_id,
+            message_request.user_id,
+            message_request.message,
+            context,
+        )
 
-    # Сохраняем ответ
-    assistant_msg = Message(
-        project_id=message_request.project_id,
-        message=groq_response,
-        role="agent",
-        timestamp=datetime.utcnow().isoformat(),
-        user_id=message_request.user_id,
-    )
-    # db_messages.save_message(assistant_msg)
+        assistant_response = Message(
+            project_id=message_request.project_id,
+            message=ai_response,
+            role="agent",
+            timestamp=datetime.utcnow(),
+            user_id=message_request.user_id,
+        )
 
-    await sio.emit("chat_message", assistant_msg.model_dump(mode="json"), room=message_request.project_id)
+        # db_messages.save_message(assistant_response)
+
+        yield f"data: {json.dumps(assistant_response.model_dump(mode='json'))}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

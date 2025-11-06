@@ -1,7 +1,6 @@
-import socketio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import projects, messages
+from .routes import projects, messages, auth
 from .db.main import db
 from app.sockets import sio_app
 from dotenv import load_dotenv
@@ -26,6 +25,7 @@ app.mount("/socket.io", sio_app)
 # Подключение маршрутов FastAPI
 app.include_router(projects.router)
 app.include_router(messages.router)
+app.include_router(auth.router)
 
 
 @app.on_event("startup")
