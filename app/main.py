@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import projects, messages, auth
-from .db.main import db
-from app.sockets import sio_app
+from app.routes import projects, messages, auth, agents
+from app.db.main import db
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,17 +14,18 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 # Socket.IO endpoint
-app.mount("/socket.io", sio_app)
+# app.mount("/socket.io", sio_app)
 
 # Подключение маршрутов FastAPI
 app.include_router(projects.router)
 app.include_router(messages.router)
 app.include_router(auth.router)
+app.include_router(agents.router)
 
 
 @app.on_event("startup")

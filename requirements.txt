@@ -9,10 +9,11 @@ python-multipart
 python-dotenv
 cassandra-driver
 aiohttp
-python-socketio
 pytest
 pytest-asyncio
 firebase-admin
 python-jose[cryptography]
 python-multipart
+PyGithub
+nanoid
 

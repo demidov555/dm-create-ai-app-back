@@ -12,7 +12,6 @@ class TokenResponse(BaseModel):
     phone: str | None = None
 
 
-# ВАЖНО: id_token передаётся в заголовке Authorization: Bearer <id_token>
 @router.post("/login", response_model=TokenResponse)
 async def login(user_data=Depends(get_current_user_firebase)):
     uid = user_data["uid"]

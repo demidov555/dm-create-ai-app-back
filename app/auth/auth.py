@@ -20,8 +20,6 @@ def create_jwt(data: dict):
     return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
 
-# app/auth/auth.py
-
 
 def get_current_user_firebase(authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):

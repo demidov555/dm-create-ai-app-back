@@ -1,125 +1,197 @@
 import os
-from typing import List, Dict
+import re
+import json
+from typing import AsyncGenerator, List, Dict
 from pprint import pprint
+import uuid
+
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.conditions import MaxMessageTermination
-from autogen_core.models import ModelInfo
 from autogen_ext.models.openai import OpenAIChatCompletionClient
+from autogen_agentchat.messages import ModelClientStreamingChunkEvent
 
+from .repo_manager import RepoManager
 
-GROQ_MODEL = os.getenv("GROQ_AI_MODEL", "llama-3.1-70b-versatile")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-
-GROQ_MODEL_INFO = ModelInfo(
-    vision=False,
-    function_calling=False,
-    json_output=True,
-    family=GROQ_MODEL,
-    structured_output=True,
-)
+# -------------------------------------------------
+# 1. Конфигурация
+# -------------------------------------------------
+AI_MODEL = os.getenv("AI_MODEL")
+AI_API_KEY = os.getenv("AI_API_KEY")
 
 model_client = OpenAIChatCompletionClient(
-    model=GROQ_MODEL,
-    model_info=GROQ_MODEL_INFO,
-    api_key=GROQ_API_KEY,
-    base_url=GROQ_BASE_URL,
+    model=AI_MODEL,
+    api_key=AI_API_KEY,
 )
 
+
+# -------------------------------------------------
+# 2. Агенты
+# -------------------------------------------------
 product_manager = AssistantAgent(
     name="ProductManager",
     model_client=model_client,
+    model_client_stream=True,
     system_message=(
-        "Ты — Product Manager. "
-        "1. Собери полное техническое задание (ТЗ) от пользователя. "
-        "Если чего-то не хватает — задай уточняющие вопросы. "
-        "Задавай вопросы пока не убедишься что каждому члену команды будет все понятно. "
-        "2. Когда ТЗ готово, скажи: 'ТЗ завершено'. "
-        "3. После этого САМ реши, кому делегировать задачи (Frontend, Backend, Designer). Или как распределить работу между ними. "
-        "Не спрашивай подтверждения у пользователя — ты принимаешь решение сам."
+        # "Ты — Product Manager.\n"
+        # "Отвечай текстом когда надо дать просто информацию и в markdown формате когда надо структурировать сообщение"
+        # "Если пользователь отправляет готовый промпт и все понятно по ТЗ — приступай к работе. Если нет, уточняй.\n"
+        # "1. Собери полное ТЗ. Задавай вопросы, пока всё не ясно.\n"
+        # "2. Когда осознал — скажи: 'ТЗ завершено'.\n"
+        "Ты ии агент для тестирования чата\n"
+        "Присылай контент который попросит пользователь.\n"
+        "Отвечай в формате текса и markdown.\n"
+        "Подставляй смайлики в заголовки и списки. В параграфы не нужно\n"
     ),
 )
 
 frontend = AssistantAgent(
     name="Frontend",
     model_client=model_client,
-    system_message="Ты — Frontend-разработчик. Реализуй UI/JS/React часть проекта по ТЗ ProductManager.",
+    model_client_stream=True,
+    system_message=(
+        "Ты — Frontend. Пиши React/Vite/JS.\n"
+        "Ответ: JSON-массив файлов.\n"
+        "```json\n"
+        '[{"path": "src/App.jsx", "content": "..."}]\n'
+        "```"
+    ),
 )
 
 backend = AssistantAgent(
     name="Backend",
     model_client=model_client,
-    system_message="Ты — Backend-разработчик. Реализуй API, базы данных и бизнес-логику по ТЗ.",
+    model_client_stream=True,
+    system_message=(
+        "Ты — Backend. Пиши FastAPI.\n"
+        "Ответ: JSON-массив файлов.\n"
+        "```json\n"
+        '[{"path": "main.py", "content": "..."}]\n'
+        "```"
+    ),
 )
 
-designer = AssistantAgent(
-    name="Designer",
-    model_client=model_client,
-    system_message="Ты — UI/UX дизайнер. Предлагай визуальные решения и макеты интерфейсов по ТЗ.",
-)
+# -------------------------------------------------
+# 3. Хранилище
+# -------------------------------------------------
+repo_managers: Dict[str, RepoManager] = {}
 
 
-async def get_product_manager_response(project_id: str, user_id: int, user_message: str, history: List[Dict]) -> str:
-    context = "\n".join(
-        f"{m.get('role','Unknown')}: {m.get('message','')}" for m in history[-10:]
+# -------------------------------------------------
+# 4. Парсинг команд
+# -------------------------------------------------
+def _parse_pm_commands(message: str, manager: RepoManager) -> str:
+    out = []
+
+    # CREATE_REPO
+    if m := re.search(r"CREATE_REPO:\s*([^\s\n]+)", message, re.IGNORECASE):
+        name = m.group(1).strip()
+        out.append(manager.create_repo(name))
+
+    # PUSH_FULL / PUSH_PATCH
+    if m := re.search(
+        r"(PUSH_FULL|PUSH_PATCH):\s*```json\s*([\s\S]*?)\s*```", message, re.IGNORECASE
+    ):
+        cmd, json_str = m.groups()
+        try:
+            files = json.loads(json_str)
+            if not isinstance(files, list):
+                files = [files]
+            if cmd.upper() == "PUSH_FULL":
+                out.append(manager.push_full(files))
+            else:
+                out.append(manager.push_patch(files))
+        except json.JSONDecodeError as e:
+            out.append(f"JSON error: {e}")
+
+    # DEPLOY
+    if re.search(r"DEPLOY_PAGES", message, re.IGNORECASE):
+        out.append(manager.enable_pages())
+    if re.search(r"DEPLOY_RENDER", message, re.IGNORECASE):
+        out.append(manager.add_render_yaml())
+
+    return "\n".join(filter(None, out))
+
+
+# -------------------------------------------------
+# 5. Проверка ТЗ
+# -------------------------------------------------
+def is_spec_complete(text: str) -> bool:
+    return "тз завершено" in text.lower()
+
+
+# -------------------------------------------------
+# 6. Ответ ProductManager (основной стрим)
+# -------------------------------------------------
+async def get_product_manager_stream(
+    project_id: uuid.UUID, user_message: str, history: list[dict]
+) -> AsyncGenerator[str, None]:
+    """
+    Стриминг только токенов.
+    Сохраняем все пробелы и переносы.
+    """
+    ctx = "\n".join(
+        f"{msg.get('role', 'user')}: {msg.get('message', '')}"
+        for msg in history[-10:]
+        if msg.get("message")
     )
 
-    task_prompt = (
-        f"Проект ID: {project_id} (Пользователь {user_id})\n"
-        f"История:\n{context}\n\n"
-        f"Новое сообщение пользователя: {user_message}\n\n"
-        "ProductManager, оцени введённые данные. Если ТЗ неполное — уточни, что нужно. "
-        "Если всё понятно, скажи 'ТЗ завершено' и объясни, что планируешь делать дальше."
+    # task = (
+    #     f"История:\n{ctx}\n\n"
+    #     f"Пользователь: {user_message}\n\n"
+    #     "Ты — Product Manager. Собери ТЗ. Когда готов — скажи 'ТЗ завершено'."
+    # )
+    task = (
+        f"История:\n{ctx}\n\n"
+        f"Пользователь прислал сообщение: {user_message}\n\n"
+        "Ответь как будто ты человек."
     )
 
-    response = await product_manager.run(task=task_prompt)
-    response_text = response.result if hasattr(
-        response, "result") else str(response)
-
-    return response_text
-
-
-def is_spec_complete(message: str) -> bool:
-    keywords = ["тз завершено", "готов передать команде",
-                "начинаю работу команды"]
-    message_lower = message.lower()
-
-    return any(k in message_lower for k in keywords)
+    async for msg in product_manager.run_stream(task=task):
+        if isinstance(msg, ModelClientStreamingChunkEvent):
+            content = getattr(msg, "content", "")
+            # ❗ Не используем .strip() — чтобы не терять пробелы и переносы
+            if content:
+                yield content
 
 
-async def run_team_work(project_id: str, specification: str) -> str:
-    task_prompt = (
-        f"Проект ID: {project_id}\n\n"
-        f"Техническое задание от ProductManager:\n{specification}\n\n"
-        "Теперь ProductManager распределяет задачи между Frontend, Backend и Designer, "
-        "координирует их работу и возвращает финальный результат пользователю."
+# -------------------------------------------------
+# 7. Командная работа после завершения ТЗ
+# -------------------------------------------------
+async def run_team_work_stream(
+    project_id: uuid.UUID, specification: str
+) -> AsyncGenerator[str, None]:
+    chat = RoundRobinGroupChat(
+        participants=[product_manager, frontend, backend],
+        termination_condition=MaxMessageTermination(max_messages=10),
     )
 
-    team_chat = RoundRobinGroupChat(
-        participants=[product_manager, frontend, backend, designer],
-        termination_condition=MaxMessageTermination(max_messages=6),
-    )
+    prompt = f"ТЗ:\n{specification}\n\nСгенерируй код."
 
-    messages = []
-    stream = team_chat.run_stream(task=task_prompt)
-
-    async for msg in stream:
-        content = getattr(msg, "content", None)
-        if isinstance(content, str) and content.strip():
-            messages.append(content.strip())
-
-    return messages[-1] if messages else ""
+    async for msg in chat.run_stream(task=prompt):
+        if isinstance(msg, ModelClientStreamingChunkEvent):
+            content = getattr(msg, "content", "")
+            if content:
+                yield content
 
 
-async def get_ai_response(project_id: str, user_id: int, user_message: str, history: List[Dict]) -> str:
-    pm_response = await get_product_manager_response(project_id, user_id, user_message, history)
+# -------------------------------------------------
+# 8. Основная функция: объединение стримов
+# -------------------------------------------------
+async def get_ai_response(
+    project_id: uuid.UUID, user_message: str, history: list[dict]
+) -> AsyncGenerator[str, None]:
+    """
+    Генератор, который объединяет стримы AI.
+    Пока отдаёт только стрим ProductManager-а.
+    """
+    async for token in get_product_manager_stream(
+        project_id, user_message, history
+    ):
+        yield token
 
-    if not pm_response:
-        return "⚠️ Нет ответа от ProductManager. Проверьте ключ или настройки модели."
-
-    if is_spec_complete(pm_response):
-        team_result = await run_team_work(project_id, pm_response)
-        return team_result or pm_response
-
-    return pm_response
+    # Позже можно добавить логику, когда ТЗ завершено:
+    # full = "".join([t async for t in get_product_manager_stream(...)])
+    # if "тз завершено" in full.lower():
+    #     async for token in run_team_work_stream(project_id, full):
+    #         yield token
