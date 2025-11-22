@@ -7,15 +7,12 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env
 load_dotenv()
 
-# Используем отдельную переменную GH_PAT для токена
 GH_PAT = os.getenv("GH_PAT")
 if not GH_PAT:
     raise EnvironmentError("Установите GH_PAT в .env")
 
 auth = Auth.Token(GH_PAT)
 g = Github(auth=auth)
-
-# Получаем текущего пользователя
 USER = g.get_user()
 
 
@@ -25,19 +22,17 @@ class RepoManager:
         self.repo_name: str | None = None
         self.repo_url: str | None = None
         self.full_pushed = False
-        self.repo_obj = None  # объект PyGithub Repository
+        self.repo_obj = None
 
     # ------------------- Создание -------------------
     def create_repo(self, name: str, private: bool = False) -> str:
         try:
-            # Проверяем, есть ли уже репозиторий
             try:
                 self.repo_obj = USER.get_repo(name)
                 self.repo_name = self.repo_obj.name
                 self.repo_url = self.repo_obj.html_url
                 return f"Репозиторий уже существует: {self.repo_url}"
             except GithubException:
-                # создаём новый репозиторий
                 self.repo_obj = USER.create_repo(
                     name=name, private=private, auto_init=True
                 )
@@ -45,12 +40,10 @@ class RepoManager:
                 self.repo_url = self.repo_obj.html_url
                 return f"Репозиторий создан: {self.repo_url}"
         except GithubException as e:
-            return f"Ошибка создания репозитория: {e.data if hasattr(e, 'data') else e}"
+            return f"Ошибка создания репозитория: {e}"
 
-    # ------------------- Пуш файлов -------------------
-    def _commit_files(
-        self, files: List[Dict[str, str]], message: str, update: bool = False
-    ) -> str:
+    # ------------------- Коммиты -------------------
+    def _commit_files(self, files: List[Dict[str, str]], message: str, update=False):
         if not self.repo_obj:
             return "Репозиторий не инициализирован."
 
@@ -58,9 +51,7 @@ class RepoManager:
         for f in files:
             path = f["path"]
             content = f["content"]
-
             try:
-                # Проверяем существование файла
                 file_content = self.repo_obj.get_contents(path)
                 if update:
                     self.repo_obj.update_file(
@@ -73,15 +64,14 @@ class RepoManager:
                 else:
                     results.append(f"Пропущен (уже есть): {path}")
             except GithubException as e:
-                # Если файл не существует, создаём
                 if e.status == 404:
                     self.repo_obj.create_file(
                         path=path, message=message, content=content
                     )
                     results.append(f"Создан: {path}")
                 else:
-                    results.append(f"Ошибка обработки {path}: {e}")
-        return "\n".join(results) if results else "Нет изменений."
+                    results.append(f"Ошибка: {path}: {e}")
+        return "\n".join(results)
 
     def push_full(self, files: List[Dict[str, str]]) -> str:
         if self.full_pushed:
@@ -101,8 +91,7 @@ class RepoManager:
             return "Репозиторий не инициализирован."
         try:
             self.repo_obj.enable_pages(source_branch="main", path="/")
-            url = f"https://{USER.login}.github.io/{self.repo_name}"
-            return f"GitHub Pages включены: {url}"
+            return f"GitHub Pages включены: https://{USER.login}.github.io/{self.repo_name}"
         except GithubException as e:
             if e.status == 409:
                 return f"Pages уже активны: https://{USER.login}.github.io/{self.repo_name}"
@@ -116,16 +105,15 @@ class RepoManager:
         path = "render.yaml"
         yaml_content = """services:
         - type: web
-        name: ai-web
-        env: python
-        plan: free
-        buildCommand: pip install -r requirements.txt
-        startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+          name: ai-web
+          env: python
+          plan: free
+          buildCommand: pip install -r requirements.txt
+          startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
         """
 
         try:
             file_content = self.repo_obj.get_contents(path)
-            # Если есть, обновляем
             self.repo_obj.update_file(
                 path=path,
                 message="Add Render deploy config",
@@ -139,4 +127,4 @@ class RepoManager:
                     path=path, message="Add Render deploy config", content=yaml_content
                 )
                 return f"{path} создан."
-            return f"Ошибка добавления {path}: {e}"
+            return f"Ошибка: {e}"

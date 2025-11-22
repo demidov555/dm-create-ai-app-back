@@ -13,7 +13,7 @@ def create_project(project, short_id: str):
             name,
             description,
             status,
-            agent_count,
+            agent_ids,
             last_updated
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
@@ -26,7 +26,7 @@ def create_project(project, short_id: str):
             project.name,
             project.description,
             project.status,
-            project.agent_count,
+            project.agent_ids,
             project.last_updated,
         ],
     )

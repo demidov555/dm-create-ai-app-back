@@ -3,9 +3,12 @@ import uuid
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 from nanoid import generate
-from ..db import projects, metrics
+
+from app.db import projects, metrics, messages, agents
 from pydantic import BaseModel
 from typing import Optional
+
+from app.db import agents as db_agents
 
 router = APIRouter()
 
@@ -23,14 +26,14 @@ class ProjectInfo(BaseModel):
     name: str
     description: Optional[str]
     status: str
-    agent_count: int
+    agent_ids: list[str]
     last_updated: datetime
 
 
 class ProjectInfoRequest(BaseModel):
     name: str
     description: str
-    agent_count: int
+    agent_ids: list[str]
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -52,7 +55,7 @@ def get_project():
         {
             "projectId": str(row.project_id),
             "shortId": getattr(row, "short_id", None),
-            "agentCount": row.agent_count,
+            "agentIds": row.agent_ids,
             "description": row.description,
             "lastUpdated": row.last_updated,
             "name": row.name,
@@ -86,7 +89,7 @@ def get_project_by_short(short_id: str):
             "name": project_info.name,
             "description": project_info.description,
             "status": project_info.status,
-            "agentCount": project_info.agent_count,
+            "agentIds": project_info.agent_ids,
             "lastUpdated": str(project_info.last_updated),
             "metrica": {
                 "progress": {
@@ -115,9 +118,10 @@ def create_project(body: ProjectInfoRequest):
         name=body.name,
         description=body.description,
         status="active",
-        agent_count=body.agent_count,
+        agent_ids=body.agent_ids,
         last_updated=now,
     )
+    projects.create_project(new_project, short_id)
 
     new_metrics = Metrica(
         project_id=project_id,
@@ -126,9 +130,12 @@ def create_project(body: ProjectInfoRequest):
         code_string_counter=0,
         test_coverage_counter=0,
     )
-
-    projects.create_project(new_project, short_id)
     metrics.create_metrics(new_metrics)
+
+    for agent_id in body.agent_ids:
+        db_agents.create_agent_state(
+            project_id=project_id, agent_id=agent_id, status="idle", current_task=None
+        )
 
     return {
         "projectId": str(project_id),
@@ -169,7 +176,9 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdateRequest):
 
     try:
         projects.update_project(
-            project_id=project_id, name=new_name, description=new_description
+            project_id=project_id,
+            name=new_name,
+            description=new_description,
         )
     except ValueError:
         return JSONResponse(
@@ -202,6 +211,8 @@ def delete_project(project_id: uuid.UUID):
     try:
         metrics.delete_metrics(project_id)
         projects.delete_project(project_id)
+        messages.delete_messages_by_project(project_id)
+        agents.delete_agent_states_by_project(project_id)
 
     except Exception as e:
         return JSONResponse(

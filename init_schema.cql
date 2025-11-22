@@ -16,11 +16,10 @@ CREATE TABLE projects (
     name text,
     description text,
     status text,
-    agent_count int,
+    agent_ids list<text>,
     last_updated timestamp
 );
 
--- индекс для поиска по short_id
 CREATE INDEX IF NOT EXISTS projects_short_id_idx ON projects (short_id);
 
 -------------------------------------------------------------------------------
@@ -29,12 +28,20 @@ CREATE INDEX IF NOT EXISTS projects_short_id_idx ON projects (short_id);
 DROP TABLE IF EXISTS agents;
 
 CREATE TABLE agents (
-  project_id uuid,
-  agent_id text,
+  agent_id text PRIMARY KEY,
   name text,
   role text,
+);
+
+DROP TABLE IF EXISTS agent_state;
+
+CREATE TABLE agent_state (
+  project_id uuid,
+  agent_id text,
   status text,
   current_task text,
+  progress int,
+  last_updated timestamp,
   PRIMARY KEY (project_id, agent_id)
 );
 
@@ -87,17 +94,17 @@ CREATE TABLE users (
 -------------------------------------------------------------------------------
 -- Insert demo data for agents
 -------------------------------------------------------------------------------
-INSERT INTO agents (project_id, agent_id, name, role, status, current_task)
-VALUES (uuid(), 'pm-agent', 'Alice', 'planner', 'working', 'Анализ бизнес-системы');
+INSERT INTO agents (agent_id, name, role)
+VALUES ('product_manager', 'Alice', 'planner');
 
-INSERT INTO agents (project_id, agent_id, name, role, status, current_task)
-VALUES (uuid(), 'designer-agent', 'Bob', 'designer', 'working', 'Проектирование интерфейса');
+INSERT INTO agents (agent_id, name, role)
+VALUES ('designer_agent', 'Bob', 'designer agent');
 
-INSERT INTO agents (project_id, agent_id, name, role, status, current_task)
-VALUES (uuid(), 'front-agent', 'Pitter', 'frontend', 'working', 'Создание домашней страницы');
+INSERT INTO agents (agent_id, name, role)
+VALUES ('frontend', 'Pitter', 'frontend agent');
 
-INSERT INTO agents (project_id, agent_id, name, role, status, current_task)
-VALUES (uuid(), 'back-agent', 'Alex', 'backend', 'idle', 'Создание CRUD API');
+INSERT INTO agents (agent_id, name, role)
+VALUES ('backend', 'Alex', 'backend agent');
 
-INSERT INTO agents (project_id, agent_id, name, role, status, current_task)
-VALUES (uuid(), 'tester-agent', 'Anna', 'qa', 'completed', 'Тестирование веб-интерфейса');
+INSERT INTO agents (agent_id, name, role)
+VALUES ('qa', 'Anna', 'qa dev');

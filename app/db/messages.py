@@ -96,3 +96,37 @@ def get_all_messages(project_id: uuid.UUID):
         all_messages.extend(msgs)
 
     return all_messages
+
+
+def delete_messages_by_project(project_id: uuid.UUID):
+    """
+    Удаляет все сообщения проекта:
+    1. Получает все bucket'ы проекта
+    2. Удаляет все сообщения в messages по каждому bucket
+    3. Удаляет bucket'ы в message_buckets
+    """
+    session = get_session()
+
+    # 1. Получить все bucket'ы
+    buckets = get_buckets_by_project(project_id)
+
+    # 2. Удалить сообщения по каждому bucket
+    for bucket in buckets:
+        session.execute(
+            """
+            DELETE FROM messages 
+            WHERE project_id = %s AND bucket = %s
+            """,
+            [project_id, bucket],
+        )
+
+    # 3. Удалить записи из bucket-таблицы
+    session.execute(
+        """
+        DELETE FROM message_buckets 
+        WHERE project_id = %s
+        """,
+        [project_id],
+    )
+
+    return {"status": "deleted", "deleted_buckets": buckets}
