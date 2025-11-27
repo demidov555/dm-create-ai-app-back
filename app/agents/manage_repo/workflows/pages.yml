@@ -1,0 +1,69 @@
+name: Deploy Frontend to GitHub Pages (Auto Detect)
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Detect frontend type
+        id: detect
+        run: |
+          if [ -f "frontend/package.json" ]; then
+            echo "type=npm" >> $GITHUB_OUTPUT
+          else
+            echo "type=static" >> $GITHUB_OUTPUT
+          fi
+
+      # --- NPM PROJECTS ---
+      - name: Install dependencies
+        if: steps.detect.outputs.type == 'npm'
+        run: |
+          cd frontend
+          npm install
+
+      - name: Build project
+        if: steps.detect.outputs.type == 'npm'
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Prepare deploy folder (npm)
+        if: steps.detect.outputs.type == 'npm'
+        run: |
+          mkdir -p public
+          cp -R frontend/dist/* public/
+
+      # --- STATIC PROJECTS ---
+      - name: Prepare deploy folder (static)
+        if: steps.detect.outputs.type == 'static'
+        run: |
+          mkdir -p public
+          cp -R frontend/* public/
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

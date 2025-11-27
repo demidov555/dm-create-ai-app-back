@@ -25,12 +25,6 @@ class CommandExecutor:
             elif t == "push_patch":
                 results.append(self.service.push_patch(cmd["files"]))
 
-            elif t == "deploy_pages":
-                results.append(self.service.enable_pages())
-
-            elif t == "deploy_render":
-                results.append(self.service.enable_render())
-
             elif t == "json_error":
                 results.append(f"JSON error: {cmd['error']}")
 

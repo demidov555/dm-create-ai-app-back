@@ -1,7 +1,10 @@
 import asyncio
-from pprint import pprint
+import json
 from typing import AsyncGenerator, Dict
 import uuid
+from app.agents.mock_task_result import create_mock_task_result
+from app.agents.prompts import generate_team_prompt
+from app.agents.team_done_termination import TeamDoneTermination
 from app.logger import Spinner, line, info, step, success, error
 
 from autogen_agentchat.teams import RoundRobinGroupChat
@@ -10,12 +13,12 @@ from autogen_agentchat.messages import ModelClientStreamingChunkEvent
 
 from .manage_repo.repository_service import RepositoryService
 from .manage_repo.repo_command_processor import RepoCommandProcessor
-from .manage_repo.command_executor import CommandExecutor
 
 from app.agents.ai_agents import (
     get_ai_agents_by_ids,
     product_manager,
 )
+
 
 repo_services: Dict[uuid.UUID, RepositoryService] = {}
 
@@ -49,53 +52,23 @@ async def run_ai_team_work(
     if project_id not in repo_services:
         repo_services[project_id] = RepositoryService(project_id)
 
-    service = repo_services[project_id]
-    processor = RepoCommandProcessor()
-    executor = CommandExecutor(service)
-
     participants = get_ai_agents_by_ids(agent_ids)
-    names = [p.name for p in participants]
+    participant_names = [p.name for p in participants]
 
     chat = RoundRobinGroupChat(
         participants=participants,
-        termination_condition=MaxMessageTermination(max_messages=10),
+        termination_condition=TeamDoneTermination(expected_roles=participant_names)
+        | MaxMessageTermination(20),
     )
 
-    prompt = f"""Ты — автономная команда разработчиков: FRONTEND + BACKEND.
-    Вы получаете полное техническое задание.
-    Каждый агент выполняет ТОЛЬКО свою роль.
-
-    ПРАВИЛА:
-    1. Работайте по очереди.
-    2. Каждый агент должен:
-    - принять ТЗ
-    - определить подходящую архитектуру проекта
-    - сгенерировать полный набор файлов
-    - вернуть PUSH_FULL (и при необходимости PATCH)
-    - выполнить деплой
-    - написать строку ГОТОВО: ROLE
-
-    3. Когда оба агента написали:
-    "ГОТОВО: FRONTEND"
-    "ГОТОВО: BACKEND"
-
-    — напишите финальную фразу:
-
-    РАБОТА ЗАВЕРШЕНА — ВСЁ ГОТОВО
-
-    ⚠️ Без объяснений.
-    ⚠️ Никакого пользовательского текста.
-    """
-
     try:
-        result = await asyncio.wait_for(chat.run(task=prompt), timeout=40)
-        commands = processor.parse_task_result(result, project_id)
-
+        service = repo_services[project_id]
+        processor = RepoCommandProcessor()
+        prompt = generate_team_prompt(specification, participant_names)
+        result = await asyncio.wait_for(chat.run(task=prompt), timeout=200)
+        commands = processor.parse_task_result(result)
         info(commands)
-        outputs = executor.execute(commands)
-
-        for line in outputs:
-            info(line)
+        service.push(commands)
 
     except asyncio.TimeoutError:
         error("[TEAM] Таймаут — команда не успела")
