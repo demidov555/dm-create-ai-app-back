@@ -16,7 +16,7 @@ class RepositoryService:
         self.manager = RepoManager(project_id)
         self.deployment: DeploymentManager | None = None
 
-    def ensure_repo(self, name: str) -> str:
+    def create_repo(self, name: str) -> str:
         if not self.manager.repo_obj:
             repo = self.manager.create_repo(name)
             self._init_deployment()
@@ -27,28 +27,49 @@ class RepositoryService:
         self.deployment.update_pages()
         return f"Repo already exists: {self.manager.repo_url}"
 
+    def delete_repo(self) -> str:
+        result = self.manager.delete_repo()
+
+        self.deployment = None
+        self.manager = None
+
+        return result
+
     def push(self, files: List[Dict[str, str]]) -> str:
-        init_msg = ""
-        if not self.manager.repo_obj:
-            init_msg = self.ensure_repo("project-" + str(self.project_id))
+        """
+        Делает один батч-коммит для всех файлов проекта.
+        Вход: список операций [{path, content?, op: create/update/delete}]
+        """
 
-        if not self._has_commits():
-            result = self.manager.push_commit(files, "Initial commit – full project")
-        else:
-            result = self.manager.push_commit(files, "Patch update", update=True)
+        commit_msg = (
+            "Initial commit – full project"
+            if not self._has_commits()
+            else "Patch update – batched"
+        )
 
-        return (init_msg + "\n" + result).strip()
+        result = self.manager.push_commit(
+            operations=files,
+            message=commit_msg,
+        )
+
+        return result
 
     def info(self) -> Dict[str, str]:
+        login = getattr(self.manager.user, "login", None)
+        repo_name = self.manager.repo_name or "not-created"
+        pages_link = f"https://{login}.github.io/{repo_name}/" if login else "n/a"
+        commits_count = str(
+            self.manager.repo_obj.get_commits().totalCount
+            if self.manager.repo_obj
+            else 0
+        )
+
         return {
             "project_id": str(self.project_id),
-            "repo_name": self.manager.repo_name or "not created",
+            "repo_name": repo_name,
             "repo_url": self.manager.repo_url or "n/a",
-            "commits_count": str(
-                self.manager.repo_obj.get_commits().totalCount
-                if self.manager.repo_obj
-                else 0
-            ),
+            "pages_link": pages_link,
+            "commits_count": commits_count,
         }
 
     def _init_deployment(self):

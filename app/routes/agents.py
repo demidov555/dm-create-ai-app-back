@@ -34,7 +34,7 @@ def get_available_agents():
                 "agentId": agent_id,
                 "name": meta["name"],
                 "role": meta["role"],
-                "required": agent_id == "product_manager",
+                "required": agent_id == "ProductManager",
             }
             for agent_id, meta in AGENT_METADATA.items()
         ]
@@ -47,12 +47,11 @@ def get_agents_with_state(request: AgentsRequestWithProject):
 
     agents_meta = []
     for agent_id in agent_ids:
-        key = agent_id.replace("-", "_")
-        meta = AGENT_METADATA.get(key)
+        meta = AGENT_METADATA.get(agent_id)
         if meta:
             agents_meta.append(
                 {
-                    "agent_id": key,
+                    "agent_id": agent_id,
                     "name": meta["name"],
                     "role": meta["role"],
                 }

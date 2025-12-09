@@ -1,14 +1,17 @@
 from datetime import datetime
+import json
 import uuid
 from fastapi import APIRouter, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from nanoid import generate
 
-from app.db import projects, metrics, messages, agents
+from app.agents.manage_repo.repository_service import RepositoryService
+from app.db import projects, metrics
 from pydantic import BaseModel
 from typing import Optional
 
 from app.db import agents as db_agents
+from app.status.sse_status_broadcaster import sse_status_broadcaster
 
 router = APIRouter()
 
@@ -104,15 +107,11 @@ def get_project_by_short(short_id: str):
     }
 
 
-# =========================
-# POST /project_create
-# =========================
 @router.post("/project_create")
 def create_project(body: ProjectInfoRequest):
     project_id = uuid.uuid4()
     now = datetime.utcnow()
     short_id = generate_short_id()
-
     new_project = ProjectInfo(
         project_id=project_id,
         name=body.name,
@@ -121,8 +120,6 @@ def create_project(body: ProjectInfoRequest):
         agent_ids=body.agent_ids,
         last_updated=now,
     )
-    projects.create_project(new_project, short_id)
-
     new_metrics = Metrica(
         project_id=project_id,
         progress_percent=0,
@@ -130,11 +127,29 @@ def create_project(body: ProjectInfoRequest):
         code_string_counter=0,
         test_coverage_counter=0,
     )
-    metrics.create_metrics(new_metrics)
 
-    for agent_id in body.agent_ids:
-        db_agents.create_agent_state(
-            project_id=project_id, agent_id=agent_id, status="idle", current_task=None
+    try:
+        projects.create_project_with_defaults(new_project, new_metrics, short_id)
+        repo_service = RepositoryService(project_id)
+        repo_service.create_repo("project-" + str(project_id))
+
+        for agent_id in body.agent_ids:
+            db_agents.create_agent_state(
+                project_id=project_id,
+                agent_id=agent_id,
+                status="idle",
+                current_task=None,
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "error": "creation_failed",
+                "message": "Ошибка при создании проекта",
+                "details": str(e),
+            },
         )
 
     return {
@@ -209,10 +224,9 @@ def delete_project(project_id: uuid.UUID):
         )
 
     try:
-        metrics.delete_metrics(project_id)
-        projects.delete_project(project_id)
-        messages.delete_messages_by_project(project_id)
-        agents.delete_agent_states_by_project(project_id)
+        projects.delete_project_with_data(project_id)
+        repo_service = RepositoryService(project_id)
+        repo_service.delete_repo()
 
     except Exception as e:
         return JSONResponse(
@@ -226,7 +240,25 @@ def delete_project(project_id: uuid.UUID):
         )
 
     return {
-        "status": "success",
-        "message": "Проект удалён",
         "projectId": str(project_id),
     }
+
+
+@router.get("/projects/{project_id}/status/stream")
+async def stream_status(project_id: uuid.UUID):
+    queue = await sse_status_broadcaster.subscribe(project_id)
+
+    async def event_stream():
+        initial = {"type": "init", "status": "connected"}
+        yield f"event: init\n"
+        yield f"data: {json.dumps(initial)}\n\n"
+
+        try:
+            while True:
+                data = await queue.get()
+                yield f"event: {data['type']}\n"
+                yield f"data: {json.dumps(data)}\n\n"
+        finally:
+            sse_status_broadcaster.unsubscribe(project_id, queue)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

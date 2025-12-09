@@ -34,6 +34,48 @@ def create_metrics(metrics):
     return {"status": "created", "projectId": str(metrics.project_id)}
 
 
+def update_metrics(project_id: uuid.UUID, updates: dict):
+    """
+    Универсальное обновление метрик проекта.
+    Обновляет только те поля, которые переданы в updates.
+    progress_last_update обновляется всегда.
+
+    updates пример:
+        {
+            "progress_percent": 100,
+            "code_string_counter": 2530
+        }
+    """
+
+    if not updates:
+        return {"status": "skipped", "reason": "empty update"}
+
+    session = get_session()
+
+    set_clauses = []
+    values = []
+
+    # динамически собираем SET выражение
+    for field, value in updates.items():
+        set_clauses.append(f"{field} = %s")
+        values.append(value)
+
+    # progress_last_update ставим всегда
+    set_clauses.append("progress_last_update = toTimestamp(now())")
+
+    query = f"""
+        UPDATE project_metrica
+        SET {", ".join(set_clauses)}
+        WHERE project_id = %s
+    """
+
+    values.append(project_id)
+
+    session.execute(query, values)
+
+    return {"status": "updated", "projectId": str(project_id)}
+
+
 def delete_metrics(project_id: uuid.UUID):
     query = "DELETE FROM project_metrica WHERE project_id = %s"
     get_session().execute(query, [project_id])

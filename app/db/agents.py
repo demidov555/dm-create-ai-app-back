@@ -75,14 +75,17 @@ def update_agent_state(
 def delete_agent_states_by_project(project_id: uuid.UUID):
     session = get_session()
 
-    query = """
-        DELETE FROM agent_state
-        WHERE project_id = %s
-    """
+    rows = session.execute(
+        "SELECT agent_id FROM agent_state WHERE project_id = %s", [project_id]
+    )
 
-    session.execute(query, [project_id])
+    for row in rows:
+        session.execute(
+            "DELETE FROM agent_state WHERE project_id = %s AND agent_id = %s",
+            [project_id, row.agent_id],
+        )
 
-    return {"status": "deleted", "project_id": project_id}
+    return {"status": "deleted", "project_id": str(project_id)}
 
 
 def get_agent(agent_id: str):
