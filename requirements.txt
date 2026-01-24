@@ -16,4 +16,5 @@ python-jose[cryptography]
 python-multipart
 PyGithub
 nanoid
+cqlsh
 
