@@ -85,8 +85,8 @@ async def run_product_manager_stream(
 async def build_contract(project_id, specification) -> str:
     result = await contract_agent.run(task=_build_contract_task(project_id, specification))
 
-    if isinstance(result, TaskResult) and result.messages:
-        return (result.messages[-1].source or "").strip()
+    if result.messages:
+        return (result.messages[-1].content or "").strip() # type: ignore
     return (result if isinstance(result, str) else str(result)).strip()
 
 
@@ -143,7 +143,7 @@ async def run_ai_agents(
     participants = get_ai_agents_by_ids(agent_ids)
     deploy_service = GitHubDeployService(
         repo_service.manager.token,
-        repo_service.manager.user.name,
+        repo_service.manager.user.login,
         repo_service.manager.repo_name
     )
 
@@ -167,18 +167,20 @@ async def run_ai_agents(
 
         await status.set_stage(project_id, ProjectStage.CODING, None)
 
-        info(f"[TEAM] response {agent.name} agent: {task_result}")
-
         commands = processor.parse_task_result(task_result)
 
-        info(f"[TEAM] {agent.name}: {commands}")
+        info(f"[TEAM][{agent.name}] parse a task: {commands}")
 
         if not repo_update_started:
             repo_update_started = True
             await status.set_stage(project_id, ProjectStage.REPO_UPDATE, 0)
 
         context_service.apply_operations(commands)
-        sha_commit = repo_service.push(commands) or ''
+        sha_commit = repo_service.push(commands)
+
+        if not sha_commit:
+            error(f"[TEAM][{agent.name}] push failed (no sha)")
+            continue
 
         res = await asyncio.to_thread(
             deploy_service.wait_build_and_get_error_text,
