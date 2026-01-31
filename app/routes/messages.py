@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 import asyncio
 import json
 import uuid
-from typing import Dict
+from typing import AsyncGenerator, Dict
 
 router = APIRouter()
 

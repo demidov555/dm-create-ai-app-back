@@ -82,12 +82,7 @@ def get_messages_by_bucket(project_id: uuid.UUID, bucket: str):
 # ===============================
 #  GET ALL MESSAGES
 # ===============================
-def get_all_messages(project_id: uuid.UUID):
-    """
-    Полностью оптимальный вариант:
-    1. Получаем bucket'ы проекта
-    2. Для каждого bucket — грузим сообщения
-    """
+def get_all_messages(project_id: uuid.UUID) -> list[dict]:
     buckets = get_buckets_by_project(project_id)
 
     all_messages = []

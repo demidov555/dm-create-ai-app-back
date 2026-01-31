@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.db import agents as db_agents
+from app.status.enums import ProjectStatus
 from app.status.sse_status_broadcaster import sse_status_broadcaster
 
 router = APIRouter()
@@ -116,7 +117,7 @@ def create_project(body: ProjectInfoRequest):
         project_id=project_id,
         name=body.name,
         description=body.description,
-        status="active",
+        status=ProjectStatus.IN_PROGRESS,
         agent_ids=body.agent_ids,
         last_updated=now,
     )

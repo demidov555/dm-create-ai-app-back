@@ -2,55 +2,56 @@ from typing import List, Dict
 import uuid
 from github import GithubException
 
+from app.logger.console_logger import error
+
 from .repo_manager import RepoManager
 from app.agents.manage_repo.deployment_manager import DeploymentManager
 
 
 class RepositoryService:
-    """
-    Второй уровень управления — бизнес-логика работы над проектом.
-    """
-
     def __init__(self, project_id: uuid.UUID):
         self.project_id = project_id
         self.manager = RepoManager(project_id)
         self.deployment: DeploymentManager | None = None
 
-    def create_repo(self, name: str) -> str:
+    def create_repo(self, name: str) -> None:
         if not self.manager.repo_obj:
-            repo = self.manager.create_repo(name)
+            self.manager.create_repo(name)
             self._init_deployment()
+
+            if not self.deployment:
+                error(f"[RepositoryService] deployment не инициализирован")
+                return
+
             self.deployment.enable_pages()
             self.deployment.push_actions_workflow()
-            return repo
+
         self._init_deployment()
+
+        if not self.deployment:
+            error(f"[RepositoryService] deployment не инициализирован")
+            return
+
         self.deployment.update_pages()
-        return f"Repo already exists: {self.manager.repo_url}"
 
-    def delete_repo(self) -> str:
-        result = self.manager.delete_repo()
-
+    def delete_repo(self) -> None:
+        self.manager.delete_repo()
         self.deployment = None
-        self.manager = None
 
-        return result
-
-    def push(self, files: List[Dict[str, str]]) -> str:
-        """
-        Делает один батч-коммит для всех файлов проекта.
-        Вход: список операций [{path, content?, op: create/update/delete}]
-        """
-
+    def push(self, files: List[Dict[str, str]]) -> str | None:
         commit_msg = (
             "Initial commit – full project"
             if not self._has_commits()
-            else "Patch update – batched"
+            else "Patch update"
         )
 
         result = self.manager.push_commit(
             operations=files,
             message=commit_msg,
         )
+
+        if not result:
+            return None
 
         return result
 
@@ -72,7 +73,7 @@ class RepositoryService:
             "commits_count": commits_count,
         }
 
-    def _init_deployment(self):
+    def _init_deployment(self) -> None:
         self.deployment = DeploymentManager(
             repo_obj=self.manager.repo_obj, gh=self.manager.gh, user=self.manager.user
         )
@@ -80,6 +81,7 @@ class RepositoryService:
     def _has_commits(self) -> bool:
         if not self.manager.repo_obj:
             return False
+
         try:
             commits = self.manager.repo_obj.get_commits()
             return commits.totalCount > 0

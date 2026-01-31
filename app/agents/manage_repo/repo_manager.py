@@ -1,12 +1,14 @@
 import os
-from typing import List, Dict
+from typing import Any, List, Dict
 import uuid
 import time
-from github import BadCredentialsException, Github, Auth, GithubException
+from github import BadCredentialsException, Github, Auth, GithubException, InputGitTreeElement
+from github.Repository import Repository
+from github.AuthenticatedUser import AuthenticatedUser
+from github.GitRef import GitRef
 from dotenv import load_dotenv
-
 from app.logger.console_logger import error, info, success
-from github import InputGitTreeElement
+
 
 load_dotenv()
 
@@ -15,14 +17,13 @@ if not GH_PAT:
     raise EnvironmentError("Установите GH_PAT в .env")
 
 try:
+    token = GH_PAT
     auth = Auth.Token(GH_PAT)
     gh = Github(auth=auth)
     user = gh.get_user()
-    print("GitHub auth OK, login:", user.login)
+    info(f"GitHub auth OK. Login:{user.login}")
 except BadCredentialsException as e:
-    raise RuntimeError(
-        "GH_PAT неверный или без прав. GitHub вернул 401 Bad credentials."
-    ) from e
+    raise RuntimeError("GH_PAT неверный или без прав") from e
 
 
 class RepoManager:
@@ -30,11 +31,11 @@ class RepoManager:
         self.project_id = project_id
         self.user = user
         self.gh = gh
+        self.token = token
         self.repo_name: str | None = None
         self.repo_url: str | None = None
-        self.repo_obj = None
+        self.repo_obj: Repository | None = None
 
-        # Пытаемся загрузить существующий репозиторий
         try:
             self.repo_obj = self.user.get_repo(f"project-{project_id}")
             self.repo_url = self.repo_obj.html_url
@@ -42,7 +43,11 @@ class RepoManager:
         except GithubException:
             self.repo_obj = None
 
-    def _wait_for_main_branch(self, timeout=5.0):
+    def _wait_for_main_branch(self, timeout=5.0) -> GitRef | None:
+        if not self.repo_obj:
+            error(f"[REPO_MANAGER] Репозиторий не найден или не инициализирован")
+            return None
+
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -51,36 +56,34 @@ class RepoManager:
                 time.sleep(0.3)
         raise RuntimeError("Main branch did not appear after repo creation")
 
-    def create_repo(self, name: str, private: bool = False) -> str:
-        """
-        Создаёт репозиторий или возвращает ссылку, если он уже существует.
-        """
+    def create_repo(self, name: str, private: bool = False) -> None:
         try:
             try:
                 self.repo_obj = self.user.get_repo(name)
                 self.repo_name = self.repo_obj.name
                 self.repo_url = self.repo_obj.html_url
-                return f"Репозиторий уже существует: {self.repo_url}"
+
             except GithubException:
+                if not isinstance(self.user, AuthenticatedUser):
+                    error(f"[REPO_MANAGER] Создание репы. Не правильный юзер")
+                    return None
+
                 self.repo_obj = self.user.create_repo(
                     name=name, private=private, auto_init=True
                 )
                 self.repo_name = self.repo_obj.name
                 self.repo_url = self.repo_obj.html_url
 
-                try:
-                    self._wait_for_main_branch()
-                except Exception as e:
-                    error(f"Ошибка ожидания ветки main: {e}")
-
-                return f"Репозиторий создан: {self.repo_url}"
+                self._wait_for_main_branch()
+                success(f"[REPO_MANAGER] Репозиторий создан: {self.repo_url}")
 
         except GithubException as e:
-            return f"Ошибка создания репозитория: {e}"
+            error(f"[REPO_MANAGER] Ошибка создания репозитория {e}")
 
-    def delete_repo(self) -> str:
+    def delete_repo(self) -> None:
         if not self.repo_obj:
-            return "Репозиторий не найден или не инициализирован."
+            error(f"[REPO_MANAGER] Ошибка удаления. Такой репы не существует")
+            return None
 
         try:
             repo = self.user.get_repo(self.repo_obj.name)
@@ -91,26 +94,23 @@ class RepoManager:
             self.repo_url = None
 
             success("Репозиторий удалён.")
-            return "Репозиторий успешно удалён."
 
         except GithubException as e:
-            error(f"Ошибка GitHub API при удалении: {e}")
-            return f"Ошибка GitHub API при удалении: {e}"
+            error(f"[REPO_MANAGER]Ошибка GitHub API при удалении: {e}")
 
         except Exception as e:
-            error(f"Ошибка удаления: {e}")
-            return f"Ошибка удаления: {e}"
+            error(f"[REPO_MANAGER]Ошибка удаления: {e}")
 
-    def push_commit(self, operations: List[Dict[str, any]], message: str) -> str:
+    def push_commit(self, operations: List[Dict[str, Any]], message: str) -> str | None:
         if not self.repo_obj:
-            return "Репозиторий не инициализирован."
+            error(f"[REPO_MANAGER] Репозиторий не инициализирован")
+            return None
 
         try:
-            try:
-                ref = self._wait_for_main_branch()
-            except Exception as e:
-                error(f"Ошибка ожидания ветки main: {e}")
-                return f"Ошибка ожидания ветки main: {e}"
+            ref = self._wait_for_main_branch()
+            if not ref:
+                error(f"[REPO_MANAGER] ref === None")
+                return None
 
             latest_commit = self.repo_obj.get_git_commit(ref.object.sha)
             tree_elements: List[InputGitTreeElement] = []
@@ -119,7 +119,8 @@ class RepoManager:
                 path = op["path"]
 
                 if op["op"] in ("create", "update"):
-                    blob = self.repo_obj.create_git_blob(op["content"], "utf-8")
+                    blob = self.repo_obj.create_git_blob(
+                        op["content"], "utf-8")
                     tree_elements.append(
                         InputGitTreeElement(
                             path=path,
@@ -155,7 +156,7 @@ class RepoManager:
             ref.edit(new_commit.sha)
 
             success(f"Коммит создан: {new_commit.sha}")
-            return f"Коммит создан: {new_commit.sha}"
+            return new_commit.sha
 
         except GithubException as e:
             return f"Ошибка Github API: {e}"

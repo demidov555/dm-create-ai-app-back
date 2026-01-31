@@ -5,8 +5,10 @@ from dotenv import load_dotenv
 
 from app.agents.prompts import (
     BACKEND_SYSTEM_PROMPT,
+    CONTRACT_AGENT_SYSTEM_PROMPT,
     FRONTEND_SYSTEM_PROMPT,
     PRODUCT_MANAGER_SYSTEM_PROMPT,
+    INTERFACE_SYSTEM_PROMPT,
 )
 
 load_dotenv()
@@ -14,44 +16,8 @@ load_dotenv()
 AI_MODEL = os.getenv("AI_MODEL")
 AI_API_KEY = os.getenv("AI_API_KEY")
 
-test_prompt = """Ты должен отправить текст который ниже один в один без исключений кроме этой строки на любое сообщение пользователя:\n
-
-Требования для frontend:
-Создай красивый сайт для кафе "Уют".
-
-Требования:
-- Современный, тёплый стиль
-- Шрифт: Google Fonts — "Playfair Display" для заголовков, "Open Sans" для текста
-
-Структура:
-1. **Хедер**:
-   - Логотип слева: "Уют" (в красивом шрифте)
-   - Меню справа: Главная | Меню | О нас | Контакты
-
-2. **Страница Главная** (полноэкранная):
-   - Фон: мягкое фото кофейни (размытое)
-   - Заголовок: "Добро пожаловать в Уют"
-   - Остальное придумай сам
-
-3. **Страница "Меню"**:
-   - 3 карточки: Кофе, Десерты, Напитки
-   - По 3 примера в каждой (название + цена)
-   - При наведении — лёгкая анимация (подъём карточки)
-
-4. **Страница "О нас"**:
-   - Сгенерируй 2 абзаца о кафе Уют, его истории и атмосфере
-
-5. **Футер**:
-   - Адрес: г. Москва, ул. Пушкина, 10
-   - Телефон: +7 (999) 123-45-67
-   - Соцсети: иконки Instagram, VK
-   - Копирайт: © 2025 Уют
-
-Требования для backend:
-- Напиши вывод в консоле Hello world
-
-ТЗ завершено!
-"""
+if not AI_MODEL or not AI_API_KEY:
+    raise EnvironmentError("Установите AI_MODEL и AI_API_KEY в .env")
 
 model_client = OpenAIChatCompletionClient(
     model=AI_MODEL,
@@ -62,7 +28,11 @@ product_manager = AssistantAgent(
     name="ProductManager",
     model_client=model_client,
     model_client_stream=True,
-    system_message=test_prompt,
+    system_message=PRODUCT_MANAGER_SYSTEM_PROMPT,
+)
+
+contract_agent = AssistantAgent(
+    name="ContractAgent", model_client=model_client, system_message=CONTRACT_AGENT_SYSTEM_PROMPT
 )
 
 frontend = AssistantAgent(
@@ -73,7 +43,12 @@ backend = AssistantAgent(
     name="Backend", model_client=model_client, system_message=BACKEND_SYSTEM_PROMPT
 )
 
+interface = AssistantAgent(
+    name="Interface", model_client=model_client, system_message=INTERFACE_SYSTEM_PROMPT
+)
+
 AI_AGENT_OBJECTS = {
+    "interface": interface,
     "frontend": frontend,
     "backend": backend,
 }

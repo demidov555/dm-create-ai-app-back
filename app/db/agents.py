@@ -7,7 +7,7 @@ def create_agent_state(
     project_id: uuid.UUID,
     agent_id: str,
     status: str = "idle",
-    current_task: str = None,
+    current_task: str | None = None,
     progress: int = 0,
 ):
     session = get_session()
@@ -52,8 +52,8 @@ def update_agent_state(
     project_id: uuid.UUID,
     agent_id: str,
     status: str,
-    current_task: str = None,
-    progress: int = None,
+    current_task: str | None = None,
+    progress: int | None = None,
 ):
 
     session = get_session()

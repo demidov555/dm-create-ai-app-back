@@ -6,10 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Инициализация FastAPI
 app = FastAPI()
 
-# Настройка CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,10 +16,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Socket.IO endpoint
-# app.mount("/socket.io", sio_app)
-
-# Подключение маршрутов FastAPI
 app.include_router(projects.router)
 app.include_router(messages.router)
 app.include_router(auth.router)

@@ -4,13 +4,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE")
+CASSANDRA_PORT = os.getenv("CASSANDRA_PORT")
+
 
 class Database:
     def __init__(self):
-        self.keyspace = os.getenv("CASSANDRA_KEYSPACE")
+        if not CASSANDRA_KEYSPACE or not CASSANDRA_PORT:
+            raise EnvironmentError("Установите CASSANDRA_KEYSPACE и CASSANDRA_PORT в .env")
+
+        self.keyspace = CASSANDRA_KEYSPACE
         self.cluster = Cluster(
             contact_points=[os.getenv("CASSANDRA_HOST")],
-            port=int(os.getenv("CASSANDRA_PORT"))
+            port=int(CASSANDRA_PORT)
         )
         self.session = self.cluster.connect(self.keyspace)
 
