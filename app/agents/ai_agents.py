@@ -10,6 +10,7 @@ from app.agents.prompts import (
     PRODUCT_MANAGER_SYSTEM_PROMPT,
     INTERFACE_SYSTEM_PROMPT,
 )
+from app.logger.console_logger import error
 
 load_dotenv()
 
@@ -54,23 +55,20 @@ AI_AGENT_OBJECTS = {
 }
 
 
-def get_ai_agents_by_ids(agent_ids: list[str] | None):
-    if not agent_ids:
-        print("NO agent_ids provided, returning empty list")
-        return []
+def get_ai_agents_by_ids(agent_ids: list[str]) -> list[AssistantAgent]:
+    agents: list[AssistantAgent] = []
 
-    agents = []
     for agent_id in agent_ids:
         key = agent_id.strip()
 
         if key not in AI_AGENT_OBJECTS:
-            print(f"ERROR: agent '{key}' NOT FOUND in AI_AGENT_OBJECTS!")
+            error(f"ERROR: agent '{key}' NOT FOUND in AI_AGENT_OBJECTS!")
             raise ValueError(f"AI agent '{key}' not found")
 
         agent = AI_AGENT_OBJECTS[key]
 
         if not hasattr(agent, "run_stream"):
-            print(f"ERROR: agent '{key}' is not a valid AssistantAgent")
+            error(f"ERROR: agent '{key}' is not a valid AssistantAgent")
             raise TypeError(f"Object '{key}' is not a valid agent instance")
 
         agents.append(agent)

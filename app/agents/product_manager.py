@@ -1,10 +1,9 @@
-import asyncio
 from app.agents.ai_agents import (
     get_ai_agents_by_ids,
     product_manager,
     contract_agent,
 )
-from app.agents.manage_repo.github_deploy_service import GitHubDeployService
+from app.agents.manage_repo.github_deploy_service import GitHubDeployService, WorkflowResult
 from .manage_repo.repo_command_processor import RepoCommandProcessor
 from .manage_repo.repository_service import RepositoryService
 from typing import AsyncGenerator, Dict
@@ -12,25 +11,28 @@ import uuid
 
 from app.agents.context.build_agent_context import build_agent_context
 from app.agents.context.project_context_service import ProjectContextService
-from app.agents.prompts import generate_agent_prompt
+from app.agents.prompts import build_fix_prompt, generate_agent_prompt
 
 from autogen_agentchat.messages import ModelClientStreamingChunkEvent
 from autogen_agentchat.base import TaskResult
+from autogen_agentchat.agents import AssistantAgent
 
 from app.logger.console_logger import info, error
 from app.status.enums import AgentTask, ProjectStage
 import app.status.status_helpers as status
 
+BUILD_CHECK_AGENTS: set[str] = {"Frontend"}
 
+
+class BuildFailed(Exception):
+    pass
+
+
+max_fix_rounds = 5
 repo_services: Dict[uuid.UUID, RepositoryService] = {}
 
 
-# =====================
-# Helpers: PM + Contract
-# =====================
-
 def _tz_done(text: str) -> bool:
-    # В PM prompt финальная строка: "ТЗ завершено"
     return "ТЗ завершено" in text
 
 
@@ -58,10 +60,6 @@ def _build_contract_task(project_id: uuid.UUID, specification: str) -> str:
     )
 
 
-# =====================
-# PM Stream
-# =====================
-
 async def run_product_manager_stream(
     project_id: uuid.UUID,
     user_message: str,
@@ -78,15 +76,11 @@ async def run_product_manager_stream(
                 yield content
 
 
-# =====================
-# Contract build (one-shot)
-# =====================
-
 async def build_contract(project_id, specification) -> str:
     result = await contract_agent.run(task=_build_contract_task(project_id, specification))
 
     if result.messages:
-        return (result.messages[-1].content or "").strip() # type: ignore
+        return (result.messages[-1].content or "").strip()  # type: ignore
     return (result if isinstance(result, str) else str(result)).strip()
 
 
@@ -99,24 +93,13 @@ def _strip_json_fences(text: str) -> str:
     return t.strip()
 
 
-# =====================
-# Repo services
-# =====================
-
 def _get_repo_service(project_id: uuid.UUID) -> RepositoryService:
     if project_id not in repo_services:
         repo_services[project_id] = RepositoryService(project_id)
     return repo_services[project_id]
 
 
-# =====================
-# Agent context rebuild
-# =====================
-
 async def _rebuild_agent_context(agent, project_id: uuid.UUID, task: str):
-    """
-    Полностью пересобирает контекст агента
-    """
     new_ctx = await build_agent_context(
         agent_name=agent.name,
         project_id=project_id,
@@ -126,12 +109,73 @@ async def _rebuild_agent_context(agent, project_id: uuid.UUID, task: str):
     await agent.model_context.clear()
 
     for msg in await new_ctx.get_messages():
+        info(f"[AGENT_HISTORY_CONTEXT]: {msg}")
         await agent.model_context.add_message(msg)
 
 
-# =====================
-# Agents execution (sequential, no chat)
-# =====================
+async def _check_build_on_success(
+    agent: AssistantAgent,
+    specification: str,
+    project_id: uuid.UUID,
+    repo_service,
+    context_service,
+    processor,
+    deploy_service: GitHubDeployService,
+    commands: list,
+) -> str:
+    def push_or_raise(cmds: list) -> str:
+        context_service.apply_operations(cmds)
+        sha = repo_service.push(cmds)
+        if not sha:
+            raise BuildFailed("push failed (no sha)")
+        return sha
+
+    sha = push_or_raise(commands)
+    info(f"[BUILD] sha: {sha}")
+    build = await _wait_and_get_build(deploy_service, project_id=project_id, agent_name=agent.name, head_sha=sha)
+    if build.ok:
+        return sha
+
+    error(f"[BUILD] is ok: {build.ok}")
+    for round_idx in range(1, max_fix_rounds + 1):
+        fix_task = build_fix_prompt(specification, agent.name, build)
+        fix_agent_result = await _run_agent_and_get_result(project_id, agent, fix_task)
+        fix_commands = processor.parse_task_result(fix_agent_result)
+        sha = push_or_raise(fix_commands)
+        info(f"[BUILD] retry fix build sha: {sha}")
+        build = await _wait_and_get_build(deploy_service, project_id=project_id, agent_name=agent.name, head_sha=sha)
+
+        if build.ok:
+            return sha
+
+    raise BuildFailed(
+        f"Build still failing after {max_fix_rounds} fix rounds. "
+        f"Last run: {build.run_url}, conclusion={build.conclusion}"
+    )
+
+
+async def _wait_and_get_build(
+    deploy_service: GitHubDeployService,
+    project_id: uuid.UUID,
+    agent_name: str,
+    head_sha: str,
+) -> WorkflowResult:
+    info(f"[_wait_and_get_build]: {agent_name}")
+    build = await deploy_service.submit_build(
+        project_id=str(project_id),
+        agent_name=agent_name,
+        head_sha=head_sha,
+    )
+    return await build
+
+
+async def _run_agent_and_get_result(project_id: uuid.UUID, agent: AssistantAgent, task: str):
+    await _rebuild_agent_context(agent, project_id, task=task)
+    await status.agent_live(project_id, agent.name, AgentTask.GENERATING_CODE)
+    result = await agent.run(task=task)
+    await status.set_stage(project_id, ProjectStage.CODING, None)
+    return result if isinstance(result, TaskResult) else result
+
 
 async def run_ai_agents(
     specification: str,
@@ -140,12 +184,12 @@ async def run_ai_agents(
 ):
     repo_service = _get_repo_service(project_id)
     context_service = ProjectContextService(project_id)
-    participants = get_ai_agents_by_ids(agent_ids)
     deploy_service = GitHubDeployService(
         repo_service.manager.token,
         repo_service.manager.user.login,
-        repo_service.manager.repo_name
+        repo_service.manager.repo_name or ''
     )
+    participants = get_ai_agents_by_ids(agent_ids)
 
     await status.set_stage(project_id, ProjectStage.ANALYSIS, 100)
     await status.set_stage(project_id, ProjectStage.CODING, 0)
@@ -159,40 +203,31 @@ async def run_ai_agents(
             role=agent.name,
         )
         await status.agent_working(project_id, agent.name, AgentTask.ANALYZING_SPEC)
-        await _rebuild_agent_context(agent, project_id, task=prompt)
-        await status.agent_live(project_id, agent.name, AgentTask.GENERATING_CODE)
+        agent_result = await _run_agent_and_get_result(project_id, agent, prompt)
+        info(f"[AI_AGENT][{agent.name}] AI response: {agent_result}")
+        commands = processor.parse_task_result(agent_result)
 
-        result = await agent.run(task=prompt)
-        task_result = result if isinstance(result, TaskResult) else result
-
-        await status.set_stage(project_id, ProjectStage.CODING, None)
-
-        commands = processor.parse_task_result(task_result)
-
-        info(f"[TEAM][{agent.name}] parse a task: {commands}")
+        info(f"[AI_AGENT][{agent.name}] parse a task for git: {commands}")
 
         if not repo_update_started:
             repo_update_started = True
             await status.set_stage(project_id, ProjectStage.REPO_UPDATE, 0)
 
-        context_service.apply_operations(commands)
-        sha_commit = repo_service.push(commands)
-
-        if not sha_commit:
-            error(f"[TEAM][{agent.name}] push failed (no sha)")
-            continue
-
-        res = await asyncio.to_thread(
-            deploy_service.wait_build_and_get_error_text,
-            head_sha=sha_commit,
-            include_raw_logs=False,
-        )
-
-        if res.ok:
-            error(f"[HANDLE_BUILD]OK: {res.run_url}")
+        if agent.name in BUILD_CHECK_AGENTS:
+            await _check_build_on_success(
+                agent=agent,
+                specification=specification,
+                project_id=project_id,
+                repo_service=repo_service,
+                context_service=context_service,
+                processor=processor,
+                deploy_service=deploy_service,
+                commands=commands,
+            )
         else:
-            error("[HANDLE_BUILD] FAILED: {res.conclusion}, {res.run_url}")
-            error(res.error_text)
+            context_service.apply_operations(commands)
+            repo_service.push(commands)
+            continue
 
         await status.agent_completed(project_id, agent.name)
         await status.set_stage(project_id, ProjectStage.CODING, int(((idx + 1) / len(participants)) * 100))
@@ -232,7 +267,7 @@ async def get_ai_response(
         return
 
     # 2) Contract build
-    info(f"[TEAM] start working {specification}")
+    info(f"[TEAM] task: {specification}")
     yield "\n\n📐 Отдаю техническое задание команде...\n\n"
 
     try:
@@ -249,7 +284,7 @@ async def get_ai_response(
     try:
         await run_ai_agents(
             specification=_strip_json_fences(contract_text),
-            agent_ids=["interface", "frontend", "backend"],
+            agent_ids=["interface", "frontend"],
             project_id=project_id,
         )
     except Exception as team_error:
