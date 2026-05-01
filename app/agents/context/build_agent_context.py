@@ -1,9 +1,7 @@
 import uuid
-from autogen_core.model_context import UnboundedChatCompletionContext
-from autogen_core.models import SystemMessage, UserMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.db import projects
-from app.logger.console_logger import info
 
 
 async def build_agent_context(agent_name: str, project_id: uuid.UUID, task: str):
@@ -12,7 +10,6 @@ async def build_agent_context(agent_name: str, project_id: uuid.UUID, task: str)
     summaries = projects.get_file_summaries(project_id)
     memory = projects.get_agent_memory(project_id, agent_name)
 
-    # convert memory into text
     memory_text = "\n".join(f"- {k}: {v}" for k, v in memory.items()) or "Нет"
 
     summaries_text = (
@@ -57,11 +54,4 @@ async def build_agent_context(agent_name: str, project_id: uuid.UUID, task: str)
     Твоя роль: {agent_name}
     """
 
-    # info(system_prompt)
-
-    ctx = UnboundedChatCompletionContext()
-
-    await ctx.add_message(SystemMessage(content=system_prompt))
-    await ctx.add_message(UserMessage(content=task, source=agent_name))
-
-    return ctx
+    return [SystemMessage(content=system_prompt), HumanMessage(content=task)]

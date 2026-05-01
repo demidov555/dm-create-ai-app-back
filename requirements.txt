@@ -1,8 +1,7 @@
 fastapi
 uvicorn
-autogenstudio
-autogen-agentchat
-autogen-ext
+langgraph
+langchain-openai
 openai
 pydantic
 python-multipart
@@ -17,4 +16,3 @@ python-multipart
 PyGithub
 nanoid
 cqlsh
-
