@@ -13,9 +13,7 @@ from app.agents.context.build_agent_context import build_agent_context
 from app.agents.context.project_context_service import ProjectContextService
 from app.agents.prompts import build_fix_prompt, generate_agent_prompt
 
-from autogen_agentchat.messages import ModelClientStreamingChunkEvent
-from autogen_agentchat.base import TaskResult
-from autogen_agentchat.agents import AssistantAgent
+from app.agents.ai_agents import LangGraphAssistantAgent, AgentTaskResult
 
 from app.logger.console_logger import info, error
 from app.status.enums import AgentTask, ProjectStage
@@ -70,10 +68,9 @@ async def run_product_manager_stream(
     task = _build_pm_task(user_message, history)
 
     async for msg in product_manager.run_stream(task=task):
-        if isinstance(msg, ModelClientStreamingChunkEvent):
-            content = getattr(msg, "content", "")
-            if content:
-                yield content
+        content = getattr(msg, "content", "")
+        if content:
+            yield content
 
 
 async def build_contract(project_id, specification) -> str:
@@ -100,21 +97,15 @@ def _get_repo_service(project_id: uuid.UUID) -> RepositoryService:
 
 
 async def _rebuild_agent_context(agent, project_id: uuid.UUID, task: str):
-    new_ctx = await build_agent_context(
+    return await build_agent_context(
         agent_name=agent.name,
         project_id=project_id,
         task=task,
     )
 
-    await agent.model_context.clear()
-
-    for msg in await new_ctx.get_messages():
-        info(f"[AGENT_HISTORY_CONTEXT]: {msg}")
-        await agent.model_context.add_message(msg)
-
 
 async def _check_build_on_success(
-    agent: AssistantAgent,
+    agent: LangGraphAssistantAgent,
     specification: str,
     project_id: uuid.UUID,
     repo_service,
@@ -169,12 +160,12 @@ async def _wait_and_get_build(
     return await build
 
 
-async def _run_agent_and_get_result(project_id: uuid.UUID, agent: AssistantAgent, task: str):
-    await _rebuild_agent_context(agent, project_id, task=task)
+async def _run_agent_and_get_result(project_id: uuid.UUID, agent: LangGraphAssistantAgent, task: str):
+    ctx_messages = await _rebuild_agent_context(agent, project_id, task=task)
     await status.agent_live(project_id, agent.name, AgentTask.GENERATING_CODE)
-    result = await agent.run(task=task)
+    result = await agent.run(task=task, context_messages=ctx_messages)
     await status.set_stage(project_id, ProjectStage.CODING, None)
-    return result if isinstance(result, TaskResult) else result
+    return result if isinstance(result, AgentTaskResult) else result
 
 
 async def run_ai_agents(
