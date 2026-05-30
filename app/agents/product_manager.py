@@ -45,7 +45,9 @@ def _build_pm_task(user_message: str, history: list[dict]) -> str:
         "Продолжи диалог как Product Manager. "
         "Если данных недостаточно — задай уточняющий вопрос. "
         "Если ТЗ готово — верни JSON для запуска агентов. "
-        "Если пользователь просит правку после работы агентов — верни revise_agents."
+        "Если пользователь просит правку после работы агентов — верни revise_agents. "
+        "Поле force_build: true только для нового проекта или явной полной пересборки. "
+        "Для точечных правок force_build=false."
     )
 
 
@@ -201,6 +203,9 @@ async def run_ai_agents(
     specification: str,
     agent_ids: list[str],
     project_id: uuid.UUID,
+    force_build: bool = False,
+    is_revision: bool = False,
+    revision_request: str | None = None,
 ):
     repo_service = _get_repo_service(project_id)
     context_service = ProjectContextService(project_id)
@@ -223,6 +228,8 @@ async def run_ai_agents(
         prompt = generate_agent_prompt(
             specification=specification,
             role=agent.name,
+            is_revision=is_revision,
+            revision_request=revision_request,
         )
 
         await status.agent_working(
@@ -246,7 +253,7 @@ async def run_ai_agents(
             repo_update_started = True
             await status.set_stage(project_id, ProjectStage.REPO_UPDATE, 0)
 
-        if agent.name in BUILD_CHECK_AGENTS:
+        if force_build and agent.name in BUILD_CHECK_AGENTS:
             await _check_build_on_success(
                 agent=agent,
                 specification=specification,
@@ -296,11 +303,7 @@ async def get_ai_response(
 
     if pm_result.action == "ask_clarification":
         await status.set_stage(project_id, ProjectStage.PM_TZ, 0)
-
-        yield (
-            pm_result.clarification_question
-            or "Уточните задачу подробнее."
-        )
+        yield pm_result.clarification_question or "Уточните задачу подробнее."
         return
 
     if pm_result.action == "answer_user":
@@ -319,6 +322,11 @@ async def get_ai_response(
         yield "Product Manager не вернул техническое задание."
         return
 
+    if not pm_result.required_agents:
+        await status.set_error(project_id)
+        yield "Product Manager не указал, каких исполнителей запускать."
+        return
+
     await status.set_stage(project_id, ProjectStage.PM_TZ, 100)
 
     if pm_result.action == "run_agents":
@@ -328,13 +336,14 @@ async def get_ai_response(
 
     info(f"[TEAM] task: {specification}")
 
-    agent_ids = pm_result.required_agents or ["frontend"]
-
     try:
         await run_ai_agents(
             specification=specification,
-            agent_ids=agent_ids,
+            agent_ids=pm_result.required_agents,
             project_id=project_id,
+            force_build=pm_result.force_build,
+            is_revision=pm_result.action == "revise_agents",
+            revision_request=pm_result.revision_request,
         )
 
     except Exception as team_error:

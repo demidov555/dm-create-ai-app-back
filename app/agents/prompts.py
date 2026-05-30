@@ -430,9 +430,35 @@ def _output_format_block(role: str) -> str:
     )
 
 
-def generate_agent_prompt(specification: str, role: str) -> str:
+def generate_agent_prompt(
+    specification: str,
+    role: str,
+    is_revision: bool = False,
+    revision_request: str | None = None,
+) -> str:
+
+    revision_block = ""
+
+    if is_revision:
+        revision_block = (
+            "\n\n"
+            "РЕЖИМ РАБОТЫ: ТОЧЕЧНАЯ ПРАВКА.\n"
+            "\n"
+            "КРИТИЧНО:\n"
+            "- Проект уже существует.\n"
+            "- Не пересоздавай проект.\n"
+            "- Не переписывай весь код.\n"
+            "- Не обновляй файлы, которых правка не касается.\n"
+            "- Верни минимальный набор изменений.\n"
+            "- Измени только реально затронутые файлы.\n"
+            "- Если достаточно изменить один файл — измени один файл.\n"
+            "\n"
+            f"ПРАВКА ОТ PRODUCT MANAGER:\n{revision_request}\n"
+        )
+
     return (
         "ТЫ — автономный исполнитель. ТЕБЯ ВЫЗЫВАЮТ РОВНО ОДИН РАЗ.\n\n"
+        f"{revision_block}\n\n"
         "ИСПОЛНЯЕМЫЙ КОНТРАКТ:\n"
         f"{specification}\n\n"
         "ТВОЯ ОТВЕТСТВЕННОСТЬ:\n"

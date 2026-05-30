@@ -24,6 +24,9 @@ AgentAction = Literal[
 ]
 
 
+ALLOWED_AGENT_IDS = {"frontend", "backend"}
+
+
 @dataclass
 class AgentMessage:
     source: str
@@ -44,6 +47,7 @@ class ProductManagerParsedResult:
     revision_request: str | None
     answer: str | None
     required_agents: list[str]
+    force_build: bool = False
 
 
 @dataclass
@@ -157,6 +161,7 @@ def create_model_client() -> ChatOpenAI:
 
 model_client = create_model_client()
 
+
 product_manager = LangGraphAssistantAgent(
     name="ProductManager",
     model=model_client,
@@ -194,8 +199,7 @@ def get_or_create_session(session_id: str) -> ProjectSession:
 
 
 def reset_project_session(session_id: str) -> None:
-    if session_id in project_sessions:
-        del project_sessions[session_id]
+    project_sessions.pop(session_id, None)
 
 
 def get_ai_agents_by_ids(agent_ids: list[str]) -> list[LangGraphAssistantAgent]:
@@ -232,7 +236,7 @@ def clean_json_response(content: str) -> str:
     if content.endswith("```"):
         content = content.removesuffix("```").strip()
 
-    return content
+    return content.strip()
 
 
 def parse_product_manager_response(content: str) -> ProductManagerParsedResult:
@@ -256,6 +260,19 @@ def parse_product_manager_response(content: str) -> ProductManagerParsedResult:
     if action not in allowed_actions:
         raise ValueError(f"ProductManager вернул неизвестный action: {action}")
 
+    required_agents_raw = data.get("required_agents") or []
+    required_agents: list[str] = []
+
+    for agent_id in required_agents_raw:
+        key = str(agent_id).strip().lower()
+
+        if key not in ALLOWED_AGENT_IDS:
+            raise ValueError(
+                f"ProductManager вернул запрещённого агента: {key}")
+
+        if key not in required_agents:
+            required_agents.append(key)
+
     return ProductManagerParsedResult(
         action=action,
         is_ready=bool(data.get("is_ready")),
@@ -263,7 +280,8 @@ def parse_product_manager_response(content: str) -> ProductManagerParsedResult:
         technical_specification=data.get("technical_specification"),
         revision_request=data.get("revision_request"),
         answer=data.get("answer"),
-        required_agents=data.get("required_agents") or [],
+        required_agents=required_agents,
+        force_build=bool(data.get("force_build", False)),
     )
 
 
@@ -305,17 +323,6 @@ async def handle_user_message(
     session_id: str,
     user_message: str,
 ) -> AgentTaskResult:
-    """
-    Главная функция.
-
-    Пользователь всегда пишет только сюда.
-    ProductManager решает:
-    - задать уточняющий вопрос
-    - запустить агентов по новому ТЗ
-    - отправить правку агентам
-    - ответить пользователю без агентов
-    """
-
     session = get_or_create_session(session_id)
 
     project_state_message = SystemMessage(
@@ -336,6 +343,9 @@ async def handle_user_message(
             *session.pm_context_messages,
         ],
     )
+
+    if not pm_result.messages:
+        raise ValueError("ProductManager не вернул ответ")
 
     pm_answer = pm_result.messages[-1].content
 
@@ -369,11 +379,13 @@ async def handle_user_message(
     if parsed.action == "run_agents":
         if not parsed.technical_specification:
             raise ValueError(
-                "ProductManager выбрал run_agents, но не вернул technical_specification")
+                "ProductManager выбрал run_agents, но не вернул technical_specification"
+            )
 
         if not parsed.required_agents:
             raise ValueError(
-                "ProductManager выбрал run_agents, но не указал required_agents")
+                "ProductManager выбрал run_agents, но не указал required_agents"
+            )
 
         session.status = "agents_running"
         session.last_technical_specification = parsed.technical_specification
@@ -382,7 +394,8 @@ async def handle_user_message(
             SystemMessage(
                 content=(
                     "Ниже находится финальное ТЗ от Product Manager. "
-                    "Выполняй только свою часть задачи согласно своей роли."
+                    "Выполняй только свою часть задачи согласно своей роли. "
+                    "Если проект уже существует, не переписывай всё без необходимости."
                 )
             )
         ]
@@ -401,15 +414,18 @@ async def handle_user_message(
     if parsed.action == "revise_agents":
         if not parsed.technical_specification:
             raise ValueError(
-                "ProductManager выбрал revise_agents, но не вернул technical_specification")
+                "ProductManager выбрал revise_agents, но не вернул technical_specification"
+            )
 
         if not parsed.revision_request:
             raise ValueError(
-                "ProductManager выбрал revise_agents, но не вернул revision_request")
+                "ProductManager выбрал revise_agents, но не вернул revision_request"
+            )
 
         if not parsed.required_agents:
             raise ValueError(
-                "ProductManager выбрал revise_agents, но не указал required_agents")
+                "ProductManager выбрал revise_agents, но не указал required_agents"
+            )
 
         previous_spec = session.last_technical_specification or "Предыдущее ТЗ отсутствует."
         previous_results = serialize_agent_results(session.last_agent_results)
@@ -420,14 +436,16 @@ async def handle_user_message(
         revision_context = [
             SystemMessage(
                 content=(
-                    "Это правка уже выполненного проекта.\n\n"
+                    "Это точечная правка уже выполненного проекта.\n\n"
                     "Пользователь общается только с Product Manager. "
                     "Ты получаешь от Product Manager обновленное ТЗ и конкретную правку.\n\n"
                     f"ПРЕДЫДУЩЕЕ ТЗ:\n{previous_spec}\n\n"
                     f"ПРЕДЫДУЩИЕ РЕЗУЛЬТАТЫ АГЕНТОВ:\n{previous_results}\n\n"
                     f"ЗАПРОС НА ПРАВКУ:\n{parsed.revision_request}\n\n"
                     "Выполни только свою часть правки. "
-                    "Не переписывай все с нуля, если это не требуется."
+                    "Не переписывай проект с нуля. "
+                    "Не пересоздавай файлы без необходимости. "
+                    "Измени только реально затронутые файлы."
                 )
             )
         ]
@@ -450,11 +468,6 @@ async def run_agents_directly(
     technical_specification: str,
     agent_ids: list[str],
 ) -> AgentTaskResult:
-    """
-    Ручной запуск агентов, если ТЗ уже готово.
-    ProductManager здесь не используется.
-    """
-
     messages = await run_selected_agents(
         technical_specification=technical_specification,
         agent_ids=agent_ids,
